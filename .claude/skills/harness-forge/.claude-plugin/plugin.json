@@ -1,0 +1,8 @@
+{
+  "name": "harness-forge",
+  "version": "2.0.0-dev",
+  "description": "Interviews you, profiles how you prompt, and generates a lean, verified personal Claude Code harness from vetted parts, with an HTML architecture page.",
+  "author": { "name": "harness-forge contributors" },
+  "license": "MIT",
+  "keywords": ["setup", "harness", "personalization", "onboarding", "claude-code"]
+}

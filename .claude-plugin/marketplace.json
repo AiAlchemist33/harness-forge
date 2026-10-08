@@ -1,0 +1,18 @@
+{
+  "name": "harness-forge",
+  "owner": { "name": "harness-forge contributors" },
+  "metadata": {
+    "description": "harness-forge: build a lean, verified personal Claude Code harness through an interview.",
+    "version": "2.0.0-dev"
+  },
+  "plugins": [
+    {
+      "name": "harness-forge",
+      "source": "./.claude/skills/harness-forge",
+      "description": "Interviews you, profiles how you prompt, and generates a personal Claude Code harness from vetted parts, with an HTML architecture page.",
+      "version": "2.0.0-dev",
+      "category": "productivity",
+      "tags": ["setup", "harness", "personalization", "onboarding"]
+    }
+  ]
+}

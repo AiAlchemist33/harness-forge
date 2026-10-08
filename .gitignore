@@ -17,3 +17,6 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# Controller scratch for plan execution (subagent-driven development)
+.superpowers/
