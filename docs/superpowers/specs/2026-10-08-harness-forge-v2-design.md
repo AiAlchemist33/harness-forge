@@ -94,7 +94,7 @@ Implementation plan: `../plans/2026-10-08-harness-forge-v2.md`.
    composed page.
 6. **Plugin + marketplace manifests: confirmed; one copy serves both channels.**
    The wizard lives as a project skills-dir plugin at
-   `.claude/skills/harness-wizard/`; `marketplace.json` points at that folder.
+   `.claude/skills/harness-forge/`; `marketplace.json` points at that folder.
    If both are present the installed copy wins and the project copy shows
    "Not loaded" (spike S2).
 7. **EN README + RU section; wizard in the user's language from message one:
@@ -149,10 +149,10 @@ open.
 ## v2 repo tree
 
 ```
-<repo>/  README.md (EN + RU) · LICENSE (MIT) · CHANGELOG.md · VERSION · CONTRIBUTING.md · SECURITY.md · CLAUDE.md (maintainer rules ≤15 lines)
-├─ .claude-plugin/marketplace.json     one plugin → ./.claude/skills/harness-wizard
-├─ .claude/settings.json               path-scoped allows for the wizard's own scripts
-├─ .claude/skills/harness-wizard/      THE PRODUCT (project skills-dir plugin = marketplace plugin; ships no hooks)
+<repo>/  README.md (EN + RU) · LICENSE (MIT) · CHANGELOG.md · VERSION · CONTRIBUTING.md · SECURITY.md · CLAUDE.md (≤40 lines: trigger routing + maintainer rules)
+├─ .claude-plugin/marketplace.json     one plugin → ./.claude/skills/harness-forge
+├─ .claude/settings.json               exact-match allows for the repo's own checks; secret deny rules
+├─ .claude/skills/harness-forge/       THE PRODUCT (project skills-dir plugin = marketplace plugin; ships no hooks)
 │  ├─ .claude-plugin/plugin.json · SKILL.md (orchestrator ≤200 lines: state machine, rules, phase index, EN+RU triggers)
 │  ├─ references/  w0-preflight … w7-handoff · interview-coverage · prompting-profile · compensations · blueprint-rules · lint-rules
 │  ├─ agents/      skill-vetter (Read/Grep only; untrusted input) · harness-reviewer · page-critic · diagram-renderer
@@ -358,7 +358,7 @@ Order: P0 → P1 → (P2 ∥ P3 ∥ P4) → P5 → P6 → (P7 ∥ P8) → P9 →
 ## Done means
 
 1. CI green on Windows, macOS, Ubuntu: `npm run validate` · `npm test` ·
-   `claude plugin validate .claude/skills/harness-wizard --strict`.
+   `claude plugin validate .claude/skills/harness-forge --strict`.
 2. In sandboxes, both "clone and run `claude`" and "`/plugin marketplace add` +
    install" start exactly one wizard, for "Let's prepare a workspace" and for
    "Давай настроим рабочее пространство".
