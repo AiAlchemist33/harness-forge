@@ -1,0 +1,30 @@
+name: ci
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+jobs:
+  validate-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run validate
+      - run: npm test
+  plugin-validate:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude plugin validate .claude/skills/harness-forge --strict
+      - run: claude --plugin-dir .claude/skills/harness-forge plugin details harness-forge

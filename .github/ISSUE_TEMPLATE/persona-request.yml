@@ -1,0 +1,22 @@
+name: Persona request
+description: Ask for a persona bundle (a profession or way of working) that the wizard should understand
+labels: [persona]
+body:
+  - type: input
+    id: persona
+    attributes:
+      label: Persona
+      placeholder: "Immigration lawyer, solo practice"
+    validations:
+      required: true
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: Recurring deliverables and materials
+      description: What this person produces every week and what they work from (documents, data, code, media).
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: What must never go wrong

@@ -1,0 +1,32 @@
+name: Catalog submission
+description: Propose a skill, plugin or tool for the vetted catalog
+labels: [catalog]
+body:
+  - type: input
+    id: repo
+    attributes:
+      label: Repository URL and commit sha
+    validations:
+      required: true
+  - type: input
+    id: licence
+    attributes:
+      label: Licence (SPDX)
+    validations:
+      required: true
+  - type: textarea
+    id: who
+    attributes:
+      label: Who is it for and what need does it cover
+    validations:
+      required: true
+  - type: input
+    id: cost
+    attributes:
+      label: Always-on token cost
+      description: Output of `claude --plugin-dir <dir> plugin details <name>` or of `/skill-doctor`.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence of quality
+      description: What you read, what you ran, what broke. Install counts and stars alone are not evidence.
