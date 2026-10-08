@@ -1,7 +1,7 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -20,8 +20,11 @@ function run(root, cwd) {
     return { code: e.status, ...JSON.parse(e.stdout) };
   }
 }
+const dirs = [];
+after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 function tree(mutate) {
   const dir = mkdtempSync(join(tmpdir(), 'hf-validate-'));
+  dirs.push(dir);
   cpSync(GOOD, dir, { recursive: true });
   if (mutate) mutate(dir);
   return dir;
@@ -113,4 +116,45 @@ test('CLAUDE.md over 40 lines fails', () => {
 test('deprecated patterns are reported', () => {
   const r = run(tree((d) => writeFileSync(join(d, 'CLAUDE.md'), '# Rules\n\nPut commands in .claude/commands/ and set includeCoAuthoredBy.\nAllow Task(Explore). Use $CLAUDE_TOOL_INPUT. Transport "type": "sse".\n')));
   for (const id of ['legacy-commands', 'include-coauthored', 'task-permission', 'tool-input-env', 'sse-transport']) assert.ok(ids(r).includes(id), id);
+});
+
+test('malformed hook entries are reported, not thrown', () => {
+  const r = run(tree((d) => writeFileSync(join(d, '.claude/settings.json'), '{"hooks":{"PreToolUse":[null]}}')));
+  assert.equal(r.code, 1);
+  assert.ok(ids(r).includes('hook-shell-form'));
+  // second branch: a matcher group whose own hooks[] holds a non-object entry
+  const r2 = run(tree((d) => writeFileSync(join(d, '.claude/settings.json'), '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[null]}]}}')));
+  assert.equal(r2.code, 1);
+  assert.ok(ids(r2).includes('hook-shell-form'));
+});
+
+test('null marketplace plugin entry is reported, not thrown', () => {
+  const r = run(tree((d) => writeFileSync(join(d, '.claude-plugin/marketplace.json'), '{"name":"fx","owner":{"name":"fx"},"plugins":[null]}')));
+  assert.equal(r.code, 1);
+  assert.ok(ids(r).includes('marketplace-shape'));
+});
+
+test('CLAUDE.md of exactly 40 lines passes', () => {
+  const r = run(tree((d) => writeFileSync(join(d, 'CLAUDE.md'), '# Rules\n' + '- line\n'.repeat(39))));
+  assert.ok(!ids(r).includes('claude-md-too-long'));
+});
+
+test('Task(s) in prose is not flagged', () => {
+  const r = run(tree((d) => writeFileSync(join(d, 'CLAUDE.md'), '# Rules\n\nThe Task(s) remain.\n')));
+  assert.ok(!ids(r).includes('task-permission'));
+});
+
+test('--root without a value exits 2', () => {
+  let status;
+  let stderr = '';
+  try {
+    // stdio 'pipe' keeps the child's usage message out of the test output
+    execFileSync(process.execPath, [VALIDATE, '--root', '--json'], { encoding: 'utf8', cwd: tmpdir(), stdio: 'pipe' });
+    status = 0;
+  } catch (e) {
+    status = e.status;
+    stderr = String(e.stderr);
+  }
+  assert.equal(status, 2);
+  assert.match(stderr, /--root needs a directory path/);
 });

@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 // harness-forge structural validator. Zero dependencies, Node >= 22.
 // Usage: node tools/validate.mjs [--root <dir>] [--json]
-// Exit 0 when no errors, 1 otherwise. Error ids are a stable contract (see the P1 plan).
+// Exit 0 when no errors, 1 otherwise, 2 on a usage error. Error ids are a stable contract (see the P1 plan);
+// validator-crash is emitted (exit 1) if the validator itself throws.
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join, relative, basename, dirname, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const flag = (n) => args.includes(n);
-const opt = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
+const opt = (n) => {
+  const i = args.indexOf(n);
+  if (i < 0) return undefined;
+  const v = args[i + 1];
+  if (v === undefined || v.startsWith('--')) { console.error(`${n} needs a directory path`); process.exit(2); }
+  return v;
+};
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = opt('--root') ?? join(dirname(SELF), '..');
 const JSON_OUT = flag('--json');
@@ -20,6 +27,7 @@ const rel = (f) => (f ? relative(ROOT, f).split(sep).join('/') : '');
 const err = (id, file, msg) => { checks++; errors.push({ id, file: rel(file), msg }); };
 const warn = (id, file, msg) => { checks++; warnings.push({ id, file: rel(file), msg }); };
 const ok = () => { checks++; };
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'docs', 'examples', 'tests', '.superpowers']);
 const SKIP_FILES = new Set(['CHANGELOG.md']);
@@ -32,7 +40,7 @@ const SHIMS = new Set(['npx', 'npm', 'pnpm', 'yarn', 'npx.cmd', 'npm.cmd']);
 const DEPRECATED = [
   ['node-eval', /\bnode\s+(?:-e|--eval)\b/],
   ['legacy-commands', /\.claude\/commands\//],
-  ['task-permission', /\bTask\(/],
+  ['task-permission', /\bTask\((?!s\))/],
   ['include-coauthored', /includeCoAuthoredBy/],
   ['sse-transport', /"type"\s*:\s*"sse"|\/sse\b/],
   ['tool-input-env', /\$CLAUDE_TOOL_INPUT/],
@@ -122,10 +130,14 @@ function checkHooks(p, json) {
   if (!hooks || typeof hooks !== 'object') return;
   for (const [event, groups] of Object.entries(hooks)) {
     if (!Array.isArray(groups)) { err('hook-shell-form', p, `${event}: expected an array of matcher groups`); continue; }
-    for (const g of groups) for (const h of g.hooks ?? []) {
-      if (h.type !== 'command') continue;
-      if (!Array.isArray(h.args)) err('hook-shell-form', p, `${event}: command hook without 'args' (exec form required): ${String(h.command).slice(0, 60)}`);
-      else if (SHIMS.has(basename(String(h.command)))) warn('hook-exec-shim', p, `${event}: '${h.command}' is a shim; exec form on Windows needs a real executable (node, powershell.exe)`);
+    for (const g of groups) {
+      if (!isObj(g)) { err('hook-shell-form', p, `${event}: matcher group is not an object`); continue; }
+      for (const h of g.hooks ?? []) {
+        if (!isObj(h)) { err('hook-shell-form', p, `${event}: hook entry is not an object`); continue; }
+        if (h.type !== 'command') continue;
+        if (!Array.isArray(h.args)) err('hook-shell-form', p, `${event}: command hook without 'args' (exec form required): ${String(h.command).slice(0, 60)}`);
+        else if (SHIMS.has(basename(String(h.command)))) warn('hook-exec-shim', p, `${event}: '${h.command}' is a shim; exec form on Windows needs a real executable (node, powershell.exe)`);
+      }
     }
   }
   ok();
@@ -138,6 +150,7 @@ function checkManifests() {
     if (m) {
       if (typeof m.name !== 'string' || !m.owner?.name || !Array.isArray(m.plugins) || m.plugins.length === 0) err('marketplace-shape', mk, 'needs name, owner.name, non-empty plugins[]');
       for (const pl of m.plugins ?? []) {
+        if (!isObj(pl)) { err('marketplace-shape', mk, 'plugin entry is not an object'); continue; }
         if (!pl.name || typeof pl.source !== 'string') { err('marketplace-shape', mk, 'plugin entry needs name and source'); continue; }
         const src = join(ROOT, pl.source);
         if (!pl.source.startsWith('./') || !existsSync(join(src, '.claude-plugin', 'plugin.json'))) err('marketplace-source', mk, `source '${pl.source}' has no .claude-plugin/plugin.json`);
@@ -152,7 +165,7 @@ function checkManifests() {
   }
   const cm = join(ROOT, 'CLAUDE.md');
   if (existsSync(cm)) {
-    const lines = readText(cm).split(/\r?\n/).length;
+    const lines = readText(cm).replace(/\r?\n$/, '').split(/\r?\n/).length;
     if (lines > 40) err('claude-md-too-long', cm, `${lines} lines > 40`); else ok();
   }
 }
@@ -177,24 +190,32 @@ function checkLicence(p) {
 
 // ---- run ----
 if (!existsSync(ROOT) || !statSync(ROOT).isDirectory()) { console.error(`root not found: ${ROOT}`); process.exit(1); }
-checkManifests();
-for (const p of walk(ROOT)) {
-  const name = basename(p);
-  const parent = basename(dirname(p));
-  checkTextFile(p);
-  if (name === 'SKILL.md') checkSkill(p);
-  else if (parent === 'agents' && name.endsWith('.md')) checkAgent(p);
-  else if (name === 'plugin.json' && parent === '.claude-plugin') checkPluginManifest(p);
-  else if (name === 'hooks.json' || name === 'settings.json' || name === 'settings.local.json') { const j = readJson(p); if (j) checkHooks(p, j); }
-  else if (/^LICENSE(\.txt|\.md)?$/i.test(name) && rel(p).includes('/skills/')) checkLicence(p);
-}
+try {
+  checkManifests();
+  for (const p of walk(ROOT)) {
+    const name = basename(p);
+    const parent = basename(dirname(p));
+    checkTextFile(p);
+    if (name === 'SKILL.md') checkSkill(p);
+    else if (parent === 'agents' && name.endsWith('.md')) checkAgent(p);
+    else if (name === 'plugin.json' && parent === '.claude-plugin') checkPluginManifest(p);
+    else if (name === 'hooks.json' || name === 'settings.json' || name === 'settings.local.json') { const j = readJson(p); if (j) checkHooks(p, j); }
+    else if (/^LICENSE(\.txt|\.md)?$/i.test(name) && rel(p).includes('/skills/')) checkLicence(p);
+  }
 
-const result = { ok: errors.length === 0, root: ROOT, checks, errors, warnings };
-if (JSON_OUT) console.log(JSON.stringify(result));
-else {
-  console.log(`harness-forge validate — ${checks} checks, ${errors.length} error(s), ${warnings.length} warning(s)`);
-  for (const w of warnings) console.log(`  ~ [${w.id}] ${w.file}: ${w.msg}`);
-  for (const e of errors) console.log(`  x [${e.id}] ${e.file}: ${e.msg}`);
-  console.log(errors.length ? 'Verdict: UNSOUND' : 'Verdict: SOUND');
+  const result = { ok: errors.length === 0, root: ROOT, checks, errors, warnings };
+  if (JSON_OUT) console.log(JSON.stringify(result));
+  else {
+    console.log(`harness-forge validate — ${checks} checks, ${errors.length} error(s), ${warnings.length} warning(s)`);
+    for (const w of warnings) console.log(`  ~ [${w.id}] ${w.file}: ${w.msg}`);
+    for (const e of errors) console.log(`  x [${e.id}] ${e.file}: ${e.msg}`);
+    console.log(errors.length ? 'Verdict: UNSOUND' : 'Verdict: SOUND');
+  }
+  process.exit(errors.length ? 1 : 0);
+} catch (e) {
+  // Unexpected exception: still produce a machine-readable verdict instead of a bare stack trace.
+  const msg = String(e && e.stack || e);
+  if (JSON_OUT) console.log(JSON.stringify({ ok: false, root: ROOT, checks, errors: [{ id: 'validator-crash', file: '', msg }], warnings }));
+  else console.error(`validator-crash: ${msg}`);
+  process.exit(1);
 }
-process.exit(errors.length ? 1 : 0);
