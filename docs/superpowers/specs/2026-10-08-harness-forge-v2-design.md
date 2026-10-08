@@ -381,3 +381,56 @@ Order: P0 → P1 → (P2 ∥ P3 ∥ P4) → P5 → P6 → (P7 ∥ P8) → P9 →
 2. Name: `harness-forge`.
 3. Army composition: A Lean.
 4. Pilots: to be requested at P10.
+
+## P0 evidence — amendments (2026-10-08, see `../../spikes-2026-10-08.md`)
+
+1. **Entry commands are sub-skills.** Under the plugin loader (`--plugin-dir`), a
+   plugin's root `SKILL.md` is ignored whenever the plugin has a `skills/`
+   folder, and a bare `/<plugin>` never appears. The wizard therefore lives in
+   `skills/start/` and `skills/reset/` → `/harness-forge:start`,
+   `/harness-forge:reset`; the root `SKILL.md` stays as a three-line alias
+   that works only in the skills-dir channel. The generated harness follows the
+   same rule: `/<name>:home`, `/<name>:tune`, `/<name>:reset`,
+   `/<name>:new-project`, `/<name>:read-document`.
+2. **Trusted-folder loading is the only untested path.** A project skills-dir
+   plugin loads after the trust dialog; `-p` never grants trust. P1's acceptance
+   therefore includes one interactive demo by the Emperor (`claude` in the repo
+   → trust → `/plugin` lists `harness-forge@skills-dir` → `/harness-forge:start`).
+   Risk 1's tripwire is corrected: a missing hook marker in `-p` means the trust
+   gate, not a loader failure.
+3. **Sandbox recipe (locked):** `claude -p "<prompt>" --plugin-dir <plugin>
+   --setting-sources project --no-session-persistence --model haiku --max-turns N
+   --output-format json` with `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` in the
+   environment (otherwise `~/.claude/CLAUDE.md` and claude.ai connectors leak
+   in; `--safe-mode` strips the plugin itself). Under this recipe skills,
+   sub-skills, agents and exec-form hooks all load (2.1.228 and 2.1.292).
+4. **Hooks:** exec-form `node` runs as a direct child of `claude.exe` (no
+   shell); shell-form runs in Git Bash; `"shell": "powershell"` works; the
+   `PowerShell` matcher fires; a missing interpreter is a non-blocking error
+   (fail open) — so `permissions.deny` rules for secrets remain mandatory. A
+   `prompt`-type Stop hook inside a plugin works (the UI prints "Stop hook
+   error occurred" when it blocks; cosmetic).
+5. **Manifests and tooling:** `claude plugin validate --strict` requires
+   `author`; `claude --plugin-dir <dir> plugin details <name>` prints
+   "Always-on: ~N tok" for an uninstalled folder (superpowers ≈ 838, chiron ≈
+   2,271) — `doctor.mjs` measures the budget this way; `claude plugin eval` is
+   early-access on 2.1.228 and works on 2.1.292 with `--trust-plugin` and
+   **`--no-publish`** (it otherwise publishes reports to claude.ai).
+6. **Versions:** the terminal CLI is 2.1.228 while the VS Code extension bundles
+   2.1.292; `claude --version` reports the CLI. On 2.1.228 `sonnet`/`opus`
+   resolve to Sonnet 5 / Opus 5, `haiku` to Haiku 4.5 on both — evals name
+   full model IDs. `promptCacheTtl` is `"5m"|"1h"` (2.1.292 only);
+   `defaultShell` is `bash|powershell` and affects only `!` commands.
+7. **Catalog seed on disk:** `~/.claude/plugins/plugin-catalog-cache.json`
+   holds 204 official plugins with token costs, install counts and pinned
+   commits (dated 2026-05-29; `tags` on 3 of 204). The official marketplace
+   is not registered on this machine.
+8. **diagram-design:** `py -3 -I scripts/self_check.py` exits 0 on the shipped
+   example and 1 on an injected `<script>`; no `prefers-color-scheme` anywhere
+   (light and dark are separate pages → the deliverable is light-only in 2.0);
+   a `.diagram-design` marker creates `~/.diagram-design/profiles/default.md`
+   on first use, so the renderer prompt pre-answers "keep default" instead of
+   writing a marker; the renderer's reading set ≈ 17.4K tokens.
+9. **Side effect to avoid:** nested runs without `--no-session-persistence`
+   leave session logs under `~/.claude/projects/`; the spikes left a few, safe
+   to delete by hand.
