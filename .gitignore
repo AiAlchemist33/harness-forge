@@ -1,0 +1,13 @@
+# Wizard state (generated per-user, not part of template)
+.wizard-state.json
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE (except .vscode/extensions.json which we want)
+.idea/
+*.swp
+*.swo
+*~
