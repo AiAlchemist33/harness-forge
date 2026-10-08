@@ -1,7 +1,7 @@
 # harness-forge — maintainer rules
 
 The product is the plugin at `.claude/skills/harness-forge/`. When someone says
-"Let's prepare a workspace" or "Давай настроим рабочое пространство", run
+"Let's prepare a workspace" or "Давай настроим рабочее пространство", run
 `/harness-forge:start`.
 
 Working in this repo:
