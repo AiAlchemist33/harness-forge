@@ -1,8 +1,35 @@
-# Battle Plan: v2.0.0 — a personal Claude Code harness for any user
+# harness-forge v2.0.0 — design spec
 
-**Status: DRAFT — awaiting the Emperor's approval.** Produced by strategos (fresh
-context, read-only) from `audit-2026-10-08.md` and `research-2026-10-08.md`;
-amended by Fable. Tier: **Campaign**.
+**Status: APPROVED 2026-10-08** (the Emperor: "yes proceed"). Produced by
+strategos (fresh context, read-only) from `../../audit-2026-10-08.md` and
+`../../research-2026-10-08.md`; amended by Fable. Tier: **Campaign**.
+Implementation plan: `../plans/2026-10-08-harness-forge-v2.md`.
+
+## Decisions taken 2026-10-08
+
+- **Name:** `harness-forge` — repo, plugin id, and the wizard's skill folder
+  (`.claude/skills/harness-forge/`); commands `/harness-forge` (start or resume)
+  and `/harness-forge:reset`. The generated harness is named by the user
+  (default `my-harness`) and gets `/<name>`, `/<name>:tune`, `/<name>:reset`.
+- **Git:** local repo initialised; `v1.1.0` tagged on the pristine snapshot; a
+  zip backup sits next to the folder
+  (`MDtemplate-v1.1.0-backup-2026-10-08.zip`). The public GitHub repo is
+  created at P9, when a README exists.
+- **Army composition A (Lean):** Fable for P3 ranking + trust red team, the P4
+  rubric, and the P10 ephor review; Opus/Sonnet elsewhere; build sessions on
+  Opus.
+- **Dev machine facts (2026-10-08):** Claude Code **2.1.228** installed (docs
+  describe 2.1.294); Node 22.20.0; git 2.51; Python 3.13 + uv; gh 2.88; pwsh 7;
+  Poppler, Tesseract and MarkItDown absent (installed in P7). The wizard gates
+  features by `claude --version`: auto mode default, `/doctor prompt-audit`,
+  `/skill-doctor`, AGENTS.md support and `plugin eval` all post-date 2.1.228.
+- **Sandbox for spikes and evals:** nested `claude -p … --setting-sources
+  project` runs work from inside a session and exclude user settings. A scratch
+  `CLAUDE_CONFIG_DIR` has no auth without an interactive login, so user-level
+  loading is tested via the equivalent project-level path, and anything that
+  must touch the live plugin registry is deferred to P9 with cleanup.
+- **diagram-design** is installed in the Emperor's `~/.claude/skills/` at sha
+  `f4547ee9…` (280 files, MIT, pin recorded in `.source.json`).
 
 ## Fable's amendments to the strategos draft
 
@@ -348,13 +375,9 @@ Order: P0 → P1 → (P2 ∥ P3 ∥ P4) → P5 → P6 → (P7 ∥ P8) → P9 →
 5. `examples/` holds those runs' real outputs; a fresh session runs the README
    quickstart verbatim; VERSION and CHANGELOG say 2.0.0, tagged.
 
-## Open questions for the Emperor
+## Questions resolved 2026-10-08
 
-1. `git init` here and a public GitHub repo (owner and name), with v1.1.0 as the
-   tagged first commit? The plan assumes yes; otherwise zip backups per phase.
-2. Product name (audit H6) — needed before P1 (README, plugin id, marketplace id).
-3. Army composition: **A Lean** (Fable ×3: P3 ranking + trust red team, P4
-   rubric, P10 ephor; everything else Opus/Sonnet), **B No Fable** (cheaper,
-   weaker red team), **C Max** (Fable ×5, adds P6 charters and P8 daedalus;
-   two 5-hour windows).
-4. Optional: two non-developer Russian-speaking pilots for P10.
+1. Git: yes — local now, GitHub repo at P9.
+2. Name: `harness-forge`.
+3. Army composition: A Lean.
+4. Pilots: to be requested at P10.

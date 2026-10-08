@@ -1,6 +1,9 @@
 # Wizard state (generated per-user, not part of template)
 .wizard-state.json
 
+# Pre-edit snapshots written by backup hooks (chiron guard-bak and the like)
+*.bak
+
 # OS files
 .DS_Store
 Thumbs.db
