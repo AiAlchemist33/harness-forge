@@ -1,29 +1,23 @@
-# Claude Code Setup Wizard
+# harness-forge — maintainer rules
 
-A template workspace that configures Claude Code for a user's system and workflow through an interactive 8-phase wizard (Phases 0–7).
+The product is the plugin at `.claude/skills/harness-forge/`. When someone says
+"Let's prepare a workspace" or "Давай настроим рабочое пространство", run
+`/harness-forge:start`.
 
-## Trigger
+Working in this repo:
 
-When the user says **"Let's prepare a workspace"** (or any setup-related request), run the `/prepare-workspace` skill. The user can also type `/prepare-workspace` directly.
-
-For unrelated requests, answer normally but mention the wizard is available.
-
-## Available Skills
-
-- `/prepare-workspace` — Run the full setup wizard (Phases 0-7)
-- `/reset-setup` — Undo wizard changes (all or selective)
-
-## Project Structure
-
-- `templates/` — Config templates, presets, and catalogs that the wizard reads during setup
-- `guides/` — Educational guides (00-06) for users who want to understand Claude Code deeply
-- `.claude/skills/` — The wizard skills themselves
-
-## Rules
-
-- Always show file contents before writing. Get confirmation.
-- Never overwrite existing configs silently — offer to merge or back up first.
-- Adapt language and complexity to user's experience level.
-- If something fails, explain why and offer alternatives — don't stop the whole wizard.
-- Reference guides from `guides/` when user needs more context.
-- On Windows, use forward slashes in display but actual OS paths for file operations.
+- Read `docs/superpowers/specs/2026-10-08-harness-forge-v2-design.md` before
+  changing behaviour; `docs/superpowers/plans/` says what is in progress.
+- Scripts under `.claude/skills/harness-forge/scripts/` and `tools/` are Node 22
+  ESM with zero dependencies. Hooks are script files called in exec form
+  (`"command": "node", "args": [...]`); inline-eval flags (`-e`, `--eval`)
+  never appear.
+- Every claim about Claude Code, a library, a price or a version carries a date
+  and a URL.
+- Nothing proprietary is vendored. Anthropic's document skills are installed
+  from their marketplace only.
+- Never run tests or spikes against the live `~/.claude`. Use the sandbox recipe
+  in the master plan (`--plugin-dir`, `--setting-sources project`,
+  `--no-session-persistence`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`).
+- Create and edit files with the Write/Edit tools: UTF-8, LF.
+- `npm run validate` and `npm test` pass before every commit.
