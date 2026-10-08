@@ -1,0 +1,316 @@
+# Research digest — 2026-10-08
+
+What the v2 design is built on. Four research passes (Claude Code configuration
+surface; skills and plugin ecosystem plus harness practice; document and OCR
+baseline; deep read of `diagram-design` and the `skills` CLI). Every claim below
+was checked on 2026-10-08 unless dated otherwise. Confidence: **[H]** primary
+source read, **[M]** secondary or paraphrased, **[L]** thin or conflicting.
+Items the implementation must re-test are collected at the end.
+
+## 1. Claude Code surface that shapes the wizard (v2.1.294)
+
+Docs root: https://code.claude.com/docs/en/
+
+### 1.1 Facts that change the design
+
+- **Writes into `~/.claude/` are protected.** They are never auto-approved except
+  in bypass mode; `allow` rules cannot pre-approve them. The prompt offers "allow
+  Claude to edit files in its ~/.claude folder for this session". The wizard must
+  ask for that once, up front. [H] https://code.claude.com/docs/en/permission-modes#protected-paths
+- **Skills-dir plugins.** `claude plugin init <name>` creates
+  `~/.claude/skills/<name>/` with `.claude-plugin/plugin.json` and a root
+  `SKILL.md`; it loads every session as `<name>@skills-dir`, no install step,
+  disabled with `claude plugin disable <name>@skills-dir`. A plugin folder may hold
+  `skills/`, `agents/`, `hooks/hooks.json`, `.mcp.json`, `output-styles/`,
+  `workflows/`, `bin/`. [H] https://code.claude.com/docs/en/plugins/create#scaffold-a-plugin-that-loads-every-session
+  — **re-test:** that `hooks/hooks.json` and `agents/` inside a skills-dir plugin
+  are honoured (documented for plugins generally, not shown for skills-dir).
+- **Auto mode is the built-in starting mode** (v2.1.283) on every plan. Modes:
+  `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`.
+  `defaultMode: auto|bypassPermissions` is ignored in project and local files.
+  Rule order: deny → ask → allow. Path rules only work as `Read()` and `Edit()`;
+  `Write()` and `Glob()` rules are never checked. `Read(/x)` in user settings
+  means `~/.claude/x`; Windows paths are `//c/...`. [H]
+  https://code.claude.com/docs/en/permissions
+- **Hooks:** 33 events, 5 handler types (`command`, `prompt`, `agent`, `http`,
+  `mcp_tool`). `prompt`/`agent` hooks answer `{"ok", "reason"}` — a cheap
+  "did you verify?" Stop gate. Exec form (`"command": "node", "args": [...]`)
+  bypasses the shell; on Windows shell-form runs in Git Bash, falling back to
+  PowerShell; `"shell": "powershell"` is available. A PreToolUse deny is absolute
+  in every mode. `additionalContext` capped at 10,000 chars. Hooks live only in
+  settings files, plugin `hooks/hooks.json`, or skill/agent frontmatter; there is
+  no standalone hooks file. [H] https://code.claude.com/docs/en/hooks
+- **Skills:** 20 frontmatter fields. `description` + `when_to_use` cut at 1,536
+  chars in the listing; listing budget is 1% of the context window, least-used
+  dropped first. `disable-model-invocation: true` removes the description from
+  context entirely (zero cost; user-only). `context: fork` + `agent` runs a skill
+  in a subagent. `paths` limits auto-invocation. `shell: powershell` for `!`
+  injection. Keep SKILL.md under 500 lines; `references/` load on demand.
+  Reserved names: `synced`, `anthropic-skills`, and the bundled skill names
+  (`/code-review`, `/doctor`, `/verify`, `/run`, `/simplify`, `/design`,
+  `/loop`, `/batch`, `/debug`, `/dataviz`, `/slides`…). Hot reload within ~100 ms.
+  [H] https://code.claude.com/docs/en/skills
+- **Agents:** 18 fields — `tools`, `disallowedTools`, `model` (`fable|opus|sonnet|haiku|inherit`),
+  `permissionMode`, `maxTurns`, `effort`, `skills` (preloads full text),
+  `memory: user|project|local`, `omitClaudeMd`, `hooks`, `background`,
+  `isolation: worktree`, `color`. Folders are scanned recursively; identity is
+  `name`. Warning if all descriptions exceed 15,000 tokens. Model precedence:
+  call → frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → main. [H]
+  https://code.claude.com/docs/en/sub-agents
+- **Memory:** CLAUDE.md target under 200 lines (startup warning when long);
+  imports do **not** reduce cost; block HTML comments are stripped (zero-cost
+  maintainer notes); `.claude/rules/*.md` with `paths` only; user rules in
+  `~/.claude/rules/`; `CLAUDE.local.md`; AGENTS.md read directly (v2.1.277).
+  Auto memory: `~/.claude/projects/<project>/memory/MEMORY.md` (first 200 lines
+  / 25 KB load), types `user|feedback|project|reference`, `autoMemoryDirectory`
+  to relocate. [H] https://code.claude.com/docs/en/memory
+- **Audit commands:** `/doctor prompt-audit` (stale/contradictory instructions,
+  v2.1.283), `/doctor` trim proposals, `/skill-doctor` (context cost and 7-day
+  usage), `/context` (what loaded), `claude plugin validate <dir>` (frontmatter
+  lint), `claude plugin eval` (graders: `regex`, `tool_used`, `file_exists`,
+  `llm`…), `/insights` (session friction, billed), `CLAUDE_CODE_NEW_INIT=1`
+  interactive `/init`, `/import codex|gemini|cursor`. [H]
+  https://code.claude.com/docs/en/commands, https://code.claude.com/docs/en/plugin-evals
+- **Settings keys the interview can fill:** `language` (e.g. `"russian"`),
+  `outputStyle`, `attribution` (replaces `includeCoAuthoredBy`),
+  `includeGitInstructions`, `model`, `modelSettings` (per-model effort; plain
+  `effortLevel` is ignored by Opus 5.5+ in user settings), `fallbackModel`
+  (array), `autoCompactWindow`, `plansDirectory`, `statusLine`, `theme`,
+  `editorMode`, `spinnerVerbs`, `enabledPlugins`, `extraKnownMarketplaces`,
+  `skillOverrides`, `autoMemoryEnabled`, `$schema`
+  (`https://json.schemastore.org/claude-code-settings.json`). Sandbox works only
+  on macOS/Linux/WSL2. [H] https://code.claude.com/docs/en/settings-reference
+- **Plugins:** `plugin.json` (`name` required; `userConfig`; `${CLAUDE_PLUGIN_DATA}`
+  survives updates), `marketplace.json` (`source: github {repo, ref, sha}` …),
+  `claude plugin install <p>@<m> --scope user`, `claude plugin details` prints
+  always-on token cost, `/reload-plugins`, `--plugin-dir` for one session. The
+  official marketplace is added automatically on first interactive start;
+  scripts must `claude plugin marketplace add anthropics/claude-plugins-official`.
+  [H] https://code.claude.com/docs/en/plugins/manifest-reference
+- **MCP:** SSE transport deprecated; `claude mcp add --scope user` for personal
+  servers; tool search defers schemas by default; docs now say CLIs (`gh`,
+  `@playwright/cli`) are more context-efficient when a shell exists. The Windows
+  `cmd /c` note is gone from the docs (re-test). [H] https://code.claude.com/docs/en/mcp
+- **Models (2026-10-08):** Fable 5.1 `claude-fable-5-1` (may bill to usage
+  credits; never a default), Opus 5.5 `claude-opus-5-5`, Sonnet 5.5
+  `claude-sonnet-5-5`, Haiku 5.5 `claude-haiku-5-5` (default `haiku` since
+  v2.1.293). Haiku 4.5 is legacy (retirement possible from 2026-10-15). Aliases
+  `default`, `best`, `opusplan`. Effort `low…max`; `ultrathink` keyword. [H]
+  https://code.claude.com/docs/en/model-config
+- **Deprecated:** `.claude/commands/` (still works, no live reload), `/agents`
+  wizard, `Task` → `Agent`, `includeCoAuthoredBy`, "headless" → non-interactive
+  (`--bare` for scripts), `TodoWrite` off by default, `Glob`/`Grep` absent by
+  default on macOS/Linux/WSL.
+
+### 1.2 Official guidance on what to write (lint rules for generated files)
+
+- Per line: "Would removing this cause Claude to make mistakes?" Include commands
+  Claude can't guess, non-default style rules, test instructions, gotchas.
+  Exclude anything derivable from code, standard conventions, tutorials,
+  file-by-file descriptions. One emphasized line at most. Explain why. Tell Claude
+  what to do, not what not to do. [H] https://code.claude.com/docs/en/best-practices
+- Multi-step procedures → skills. Guidance for one part of a codebase →
+  path-scoped rules. Must-always-happen → hooks. "You don't need to configure
+  everything up front" — triggers: wrong twice → CLAUDE.md; same playbook pasted
+  three times → skill; every time → hook. [H] https://code.claude.com/docs/en/features-overview
+- Current models over-trigger on "CRITICAL: You MUST…"; write calmly. [H]
+  https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
+
+## 2. Evidence on context files and length
+
+- **ETH Zurich (rev. 2026-09-29):** context files "do not generally improve task
+  success rates" and raise inference cost by over 20%; repository overviews are
+  not helpful. [H] https://arxiv.org/abs/2602.11988
+- **IFScale:** the best model follows 68% of 500 instructions; earlier
+  instructions are favoured. [H] https://arxiv.org/abs/2507.11538
+- **Context rot (Chroma):** performance drops with input length across 18 models.
+  [H] https://www.trychroma.com/research/context-rot
+- **HumanLayer:** frontier models follow ~150–200 instructions and the system
+  prompt already uses ~50; keep CLAUDE.md under 300 lines (theirs is under 60);
+  "never send an LLM to do a linter's job". [M] https://www.humanlayer.dev/blog/writing-a-good-claude-md
+- **Microsoft, "Stop skillmaxxing":** fifty skills burn ~10,000 tokens before the
+  first prompt; three well-scoped skills outperform fifty. [H]
+  https://developer.microsoft.com/blog/stop-skillmaxxing-save-your-tokens/
+- **SWE-chat (rev. 2026-10-01):** 18k real sessions; users push back in 50% of
+  turns. [H] https://arxiv.org/abs/2604.20779
+- **Chiron research compendium** (this machine, 2026-08): harness is the unit of
+  reliability; verification is the multiplier; intrinsic self-correction fails;
+  fan out reads, serialize writes. `C:\Work\Research Harness\docs\02-research.md`.
+
+Design consequence: the generated harness is a **lean seed** (identity + routing,
+~60 lines always loaded) plus on-demand skills, path-scoped rules, hooks for
+law, and growth triggers — not a kit.
+
+## 3. Ecosystem: discovery, trust, and the catalog seed
+
+### 3.1 Channels
+
+| Channel | Signal | Trust |
+|---|---|---|
+| claude.com/marketplace (`anthropics/claude-plugins-official`, 37.5K stars, ~341 plugins) | install counts, "Anthropic verified" badge, per-plugin token cost | best available [H] |
+| `anthropics/claude-plugins-community` (`@claude-community`), `anthropics/skills` (`@anthropic-agent-skills`), `anthropics/knowledge-work-plugins` | topic marketplaces | official [H] |
+| skills.sh (`npx skills`) — public JSON search `https://skills.sh/api/search?q=&limit=20` | hourly-deduplicated install events; partner audits (Socket, Snyk, Gen) | **gamed**: typosquat trojans reached 1.7M installs (Zenity, 2026-08-06); look-alike `*/superpowers` repos trend today [H] |
+| GitHub stars | — | ~6M suspected fake stars, AI repos targeted (ICSE'26) [H] |
+| awesome-claude-code (55K), awesome-claude-skills (77K), aitmpl.com (32K) | lists | best-effort, no quality gate [H] |
+
+Rule for the catalog: rank on official installs + verified badge + measured
+context cost + audit verdicts + license; stars as a tiebreaker; `find-skills`
+thresholds (≥1K installs, trusted owners, ≥100 stars) as a floor for live search,
+never as proof.
+
+### 3.2 Install-channel collisions (the wizard must inventory first)
+
+`enabledPlugins` in settings, `~/.claude/skills/`, `~/.agents/skills/`,
+`~/.agents/.skill-lock.json`, `./skills-lock.json`, the demo marketplace
+`claude-code-plugins` duplicating official names. Plugin + skills-CLI install of
+the same pack gives every skill twice. `skills` CLI bug #851: global install can
+land in `~/.agents/skills` with no link into `~/.claude/skills` — verify on disk.
+
+### 3.3 Catalog seed (ranked by official or skills.sh installs, judged by reading)
+
+| Name | Signal | What | For | Verdict / caveat |
+|---|---|---|---|---|
+| frontend-design (Anthropic) | 1.13M plugin installs | commits to a design direction before coding | anyone shipping UI | excellent |
+| superpowers (obra) | 297K stars; 1.0M plugin | brainstorm → plan → execute → TDD → debug, enforced | developers wanting a method | excellent; always-on SessionStart hook costs tokens |
+| mattpocock/skills | 280K stars; grill-me 1.3M | grill-me interviews, to-spec, tdd, handoff | developers; grill-me suits non-devs | excellent; 3-line user-only stub pattern to copy |
+| code-review (Anthropic) | 439K | parallel review agents, 80% confidence floor | GitHub teams | excellent; needs `gh` |
+| document skills docx/pdf/pptx/xlsx (anthropics/skills) | pdf 207K | create/edit/extract Office + PDF | consultants, lawyers, students | excellent; **proprietary license — install via marketplace, never bundle** |
+| claude-md-management (Anthropic) | 287K | audits CLAUDE.md; `/revise-claude-md` | everyone | excellent; overlaps `/doctor prompt-audit` |
+| skill-creator (Anthropic) | official | A/B runs, description tuning, benchmark.json | skill authors (the wizard itself) | excellent |
+| Context7 | 418K plugin | current library docs; `npx ctx7 setup` CLI mode | developers | good; free tier 1,000 calls/month |
+| LSP plugins (typescript-lsp…) | 213K | go-to-def, type errors after edits | typed-language devs | excellent |
+| security-guidance (Anthropic) | 242K | edit warnings + diff review on stop | all developers | good; extra model calls |
+| feature-dev (Anthropic) | 256K | 7-phase feature workflow | multi-file features | good; skip for hotfixes |
+| claude-code-setup (Anthropic) | 195K | read-only recommendations | new users | good; developer-only, never writes |
+| knowledge-work-plugins (Anthropic) | 27K stars | legal, marketing, sales, finance, PM, support, productivity | **non-developers** | good; value depends on connected tools |
+| diagram-design (cathrynlavery) | 45.5K stars | 44 diagram types, self-contained HTML+SVG | consultants, architects, this wizard | excellent; see §5 |
+| addyosmani/agent-skills | 103K | 25 lifecycle skills with rationalization tables | teams | excellent; single-skill CLI install drops references |
+| ccusage | 19K | local token/cost reports | everyone | excellent |
+| hookify (Anthropic) | 60K | hooks from markdown rules | repeat-correction users | good; Python |
+| humanizer / stop-slop | 55K / 18K | anti-AI-writing patterns | writers, marketers | good; **English only** — RU users need their own rules |
+| taste-skill / ui-ux-pro-max / awesome-design-md | 94K / 134K / 120K | design direction, design systems, brand DESIGN.md | designers, front-end | good; ui-ux needs Python |
+| agent-browser (vercel-labs) | 1.1M skills.sh | browser CLI for agents, Windows OK | web automation | good |
+| trailofbits/skills | 7.4K | 40+ security plugins | security engineers | excellent; CC-BY-SA |
+| markitdown (189K) / docling (69K) | — | Office/PDF → Markdown; docling adds OCR and tables | document-heavy work | excellent tools; need a wrapper skill (§7) |
+| spec-kit (GitHub) | 141K | spec-driven dev | greenfield teams | good; Python+uv, heavy |
+| gstack (Garry Tan) | 136K | 23 role skills | founders | good; Bun + Chromium, one person's opinions |
+| remember / claude-mem | 51K / 98K | memory layers | heavy multi-session | fair / heavy; built-in auto memory covers basics |
+| ECC, ruflo, SuperClaude, caveman | 275K / 74K / 24K / 110K | mega-bundles, swarms, terse-mode | — | **hype or stale**: 293 skills cost context every turn; ruflo ~97% stub tools; caveman oversells |
+
+Windows dependency checks the wizard must run: Node ≥ 22.20 (skills CLI,
+hyperframes, tdd-guard), Python (hookify, spec-kit, serena, ui-ux-pro-max,
+diagram-design `self_check`), Bun (gstack, claude-mem), Git Bash vs PowerShell
+for hooks.
+
+### 3.4 Competitors (what to beat)
+
+Interactive `/init` (project-only, no persona), `claude-code-setup` (read-only,
+dev-only), ECC (huge bundle, Windows defects), gstack (one person's setup),
+claude-code-templates (catalog, no interview), oh-my-claudecode (orchestration),
+cc-rig (scores setups on cache/safety/context/workflow/verification/currency —
+worth borrowing), trailofbits/claude-code-config (security defaults). None does:
+persona for non-developers + ranked quality picks + prompting-style coaching +
+seed-not-kit + a designed deliverable. [H]
+
+## 4. Prompting-style prior art (for the profile module)
+
+- **Anthropic AI Fluency Index (2026-02-23, 9,830 conversations):** 11 behaviors
+  with base rates — iterates 85.7%, clarifies goal 51.1%, gives examples 41.1%,
+  specifies format 30%, sets interaction mode 30%, states tone 22.7%, flags
+  missing context 20.3%, defines audience 17.6%, questions reasoning 15.8%, asks
+  about approach first 10.1%, fact-checks 8.7%. [H]
+  https://academy.claude.com/tutorials/the-ai-fluency-index
+- **Reflect with Claude (2026-07-09):** 4D framework — delegation, description,
+  discernment, diligence. [H] https://www.anthropic.com/news/reflect-with-claude
+- **Built-ins:** `/insights` (friction points, misunderstood requests), `/powerup`
+  lessons, `discernment-nudge` skill (2–3 questions after consequential answers).
+- **Best-practices failure patterns:** kitchen-sink session, correcting over and
+  over (after two failed corrections, `/clear`), over-specified CLAUDE.md,
+  trust-then-verify gap, infinite exploration. "If you could describe the diff in
+  one sentence, skip the plan." A vague prompt is right when exploring.
+- **Prompts as requirements:** prompts mix requirements, general and specific
+  solutions (Chakraborty & Steghöfer 2026, https://arxiv.org/abs/2603.16348);
+  PromptDebt (https://arxiv.org/abs/2509.20497).
+
+Signal → compensation map (seed for the module):
+
+| Observed in the interview | Harness compensation |
+|---|---|
+| Goal without a success check | verify-before-done Stop hook (prompt type); rule "show evidence" |
+| One-line vague asks for multi-file work | grill-me / plan-first skill; plan mode habit |
+| Dumps context, wants everything in CLAUDE.md | lean CLAUDE.md, path-scoped rules, teach `@file` |
+| Never questions output | discernment nudge; fresh-context reviewer agent |
+| Capitals and absolutes | generated files written calmly; one emphasized line |
+| Repeats the same correction | teach `/clear`; hookify-style rule from the correction |
+| Exploratory vagueness | do not penalize; no gate for exploration |
+
+## 5. diagram-design (cathrynlavery/diagram-design) — facts for the deliverable
+
+- 45,544 stars, MIT, created 2026-04-16, pushed 2026-10-08, manifest 2.6.68,
+  skills.sh 8,316 installs. Prompt-driven spec, not a renderer: the model draws
+  the SVG. Output: one self-contained `.html`, embedded CSS, inline SVG, Google
+  Fonts the only external asset, static by default. [H]
+  https://github.com/cathrynlavery/diagram-design
+- Install (global, Windows, copy mode because junctions are hidden from the `/`
+  menu): `npx --yes skills@1.7.1 add cathrynlavery/diagram-design --skill diagram-design -g -a claude-code -y --copy`
+  (Node ≥ 22.20, git on PATH; pin with `#<sha>`). Alternative:
+  `/plugin marketplace add cathrynlavery/diagram-design` then
+  `/plugin install diagram-design@diagram-design`. Manual: clone and copy
+  `skills/diagram-design/` into `~/.claude/skills/diagram-design/`.
+- Rules the wizard must pre-answer or hard-require: style-guide gate (default
+  tokens paper `#f5f5f5`, ink `#2d3142`, accent `#eb6c36`; pass a `.diagram-design`
+  marker + profile or "keep default"); pin type, size and content in the prompt
+  or the skill pauses to ask; budget ≤ 9 nodes, ≤ 12 arrows, ≤ 2 accent
+  elements, ≤ 2 callouts; `architecture` type allows 3 zones, `layers` max 6;
+  six connector rules (orthogonal, ≤14-char masked labels, no overlaps, fan
+  attach points, no transit behind boxes, mask/node order); no shadows, radius
+  ≤ 10 px, 4 px grid; `role="img"` + `aria-labelledby`; `python scripts/self_check.py <file>`
+  must exit 0 (checks a11y contract, single-file safety, no scripts, no remote
+  assets beyond the fonts link). Cyrillic: Geist/Geist Mono ship Cyrillic,
+  Instrument Serif does not → `'Instrument Serif','Noto Serif',serif` for
+  titles; avoid forced uppercase on Cyrillic labels; set `<html lang>`.
+- Its shipped examples include `nested` (literally a `~/.claude/` cascade) and
+  `tree` (a skills taxonomy) — the closest starting points. Light and dark are
+  separate files (no `prefers-color-scheme` seen — re-test). Context cost per
+  diagram ≈ 17–22K tokens (one-time, acceptable).
+
+## 6. `skills` CLI (vercel-labs/skills) — facts for live discovery
+
+- 33,402 stars, MIT, npm `skills` 1.7.1 (2026-10-06), Node ≥ 22.20.0, needs
+  `git`. Commands: `add|use|list|find|update(=check)|remove|init`. `add` flags:
+  `-g`, `-a <agent>`, `-s/--skill`, `-l`, `--copy`, `-y`, `--all`, `--json`
+  (needs `-y`). Sources: `owner/repo`, `owner/repo@skill`, `owner/repo#ref`, URLs,
+  local paths. Claude Code paths: `~/.claude/skills/<name>` (global),
+  `.claude/skills/<name>` (project). Default is a symlink/junction to
+  `~/.agents/skills/<name>`; `--copy` writes real files. Lock:
+  `~/.agents/.skill-lock.json`. Telemetry on by default (`DISABLE_TELEMETRY=1`).
+  Non-TTY without `-y` exits 1. Wiped-and-rewritten target dir, no prompt. [H]
+- Search: `GET https://skills.sh/api/search?q=<q>&limit=20` → `{skills:[{id,name,source,installs}]}`,
+  no auth (undocumented but used by the CLI). `find-skills` rules: prefer ≥ 1K
+  installs, trusted owners (vercel-labs, anthropics, microsoft), ≥ 100 stars;
+  present name, installs, command, link; install only on user agreement.
+- Windows: always pass `-a claude-code` (else `-y` installs to every detected
+  agent); use `--copy`; verify `SKILL.md` exists on disk afterwards (bug #851,
+  possible libuv exit crash #1346); check the folder is not a whole repo (#1469).
+
+## 7. Document / PDF / OCR baseline
+
+_Pending — research pass still running at the time of writing. Working
+assumption for the plan: official document skills installed from the
+`anthropic-agent-skills` marketplace (never bundled), plus a wizard-authored
+wrapper skill over local extractors (markitdown / docling / PyMuPDF) with a
+fallback chain text-layer → extractor → OCR (Cyrillic-capable) → Claude vision
+on page ranges, caching extracted text as a sidecar `.md`. To be replaced with
+the verified findings._
+
+## 8. Items to re-test during implementation
+
+1. Skills-dir plugin: do `hooks/hooks.json` and `agents/` load from
+   `~/.claude/skills/<name>/`? (If not: loose files + settings hooks.)
+2. Windows `npx` MCP servers without `cmd /c`.
+3. `skills` CLI 1.7.1 on Windows: exit crash, `~/.claude/skills` link creation.
+4. diagram-design: `prefers-color-scheme` support; `self_check.py` with Python
+   launcher `py -3`; gate bypass with a `.diagram-design` marker.
+5. `claude plugin eval` against a personal skills folder (`name@skills-dir`).
+6. Exact value shapes for `defaultShell`, `promptCacheTtl`; `/config --help`.
+7. Haiku 5.5 as default `haiku` on this account (v2.1.293).
