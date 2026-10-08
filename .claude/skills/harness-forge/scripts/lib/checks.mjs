@@ -11,6 +11,8 @@ const SELF = fileURLToPath(import.meta.url);
 const FFFD = String.fromCharCode(0xfffd);
 
 export const TEXT_EXT = new Set(['.md', '.json', '.mjs', '.js', '.cjs', '.yml', '.yaml', '.txt', '.html', '.css', '.ps1', '.sh', '.cmd', '.bat', '.svg']);
+// Extensionless text files: they get the encoding checks, not the deprecated-pattern scan.
+export const BARE_TEXT = /^(LICENSE|LICENCE|COPYING|NOTICE|VERSION)$/i;
 export const CRLF_OK = new Set(['.cmd', '.bat']);
 export const RESERVED = new Set(['synced', 'anthropic-skills', 'batch', 'claude-api', 'claude-in-chrome', 'code-review', 'review', 'dataviz', 'debug', 'design', 'design-sync', 'doctor', 'checkup', 'fewer-permission-prompts', 'loop', 'proactive', 'run', 'run-skill-generator', 'simplify', 'slides', 'update-config', 'verify', 'workflow-authoring', 'artifact-capabilities', 'artifact-diagramming', 'deep-research', 'plugin-authoring', 'init', 'memory', 'config', 'help']);
 export const PROPRIETARY_SKILLS = new Set(['pdf', 'docx', 'xlsx', 'pptx']);
@@ -32,9 +34,13 @@ export const DEPRECATED = [
   ['tool-input-env', /(\$env:|process\.env\.|\$)CLAUDE_TOOL_INPUT/],
 ];
 
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'docs', 'examples', 'tests', '.superpowers']);
-const SKIP_FILES = new Set(['CHANGELOG.md']);
+const SKIP_ANY = new Set(['.git', 'node_modules', '.superpowers']); // skipped at any depth
+const SKIP_ROOT = new Set(['docs', 'examples', 'tests']); // skipped only directly under the root
+const PERSONAL = new Set(['settings.local.json']); // personal settings never gate a repo: not parsed, not linted
+// Generated-harness templates, matched by path segment so the rules follow the plugin wherever it lives.
+const HARNESS_TEMPLATES = /(^|\/)templates\/harness\//;
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const inHarness = (p, c) => HARNESS_TEMPLATES.test(c.rel(p));
 
 // Findings sink. rel() makes a path root-relative with forward slashes; lastFile is the file read last (it names the
 // culprit if a check throws); first() is true once per (id, file), for checks that run on every read of a file.
@@ -100,16 +106,18 @@ export function frontmatter(text, p, c, kind) {
   return fm;
 }
 
-// Encoding checks for every text file, then the content scan (deprecated patterns, template rules) unless exempt.
+// Encoding checks for every text file, then the content scan (deprecated patterns, template rules) unless the file is
+// exempt or an extensionless BARE_TEXT file.
 export function checkTextFile(p, c, { exempt = false } = {}) {
   const ext = extname(p);
-  if (!TEXT_EXT.has(ext) || SKIP_FILES.has(basename(p))) return;
+  const bare = BARE_TEXT.test(basename(p));
+  if (!TEXT_EXT.has(ext) && !bare) return;
   const text = readText(p, c);
   if (text.includes(FFFD)) c.err('replacement-char', p, 'contains U+FFFD (encoding corruption)');
   if (!CRLF_OK.has(ext) && text.includes('\r\n')) c.err('crlf', p, 'CRLF line endings');
-  if (!exempt) {
+  if (!exempt && !bare) {
     for (const [id, re] of DEPRECATED) if (re.test(text)) c.err(id, p, `deprecated pattern ${re}`);
-    if (c.rel(p).startsWith('templates/') && /"effortLevel"\s*:/.test(text)) c.warn('user-effort-level', p, 'top-level effortLevel is ignored by Opus 5.5+; use modelSettings');
+    if (inHarness(p, c) && /"effortLevel"\s*:/.test(text)) c.warn('user-effort-level', p, 'top-level effortLevel is ignored by Opus 5.5+; use modelSettings');
   }
   c.ok();
 }
@@ -126,7 +134,7 @@ export function checkSkill(p, c) {
   if (!isPluginRoot && PROPRIETARY_SKILLS.has(folder) && basename(dirname(dir)) === 'skills') c.err('vendored-proprietary', p, `'${folder}' matches Anthropic's proprietary document skills; install them from the marketplace instead`);
   if (!fm.description) c.err('skill-description', p, 'missing or block-scalar description');
   else if (fm.description.length > 1024) c.err('skill-description-long', p, `${fm.description.length} chars > 1024`);
-  else if (c.rel(p).startsWith('templates/harness/') && fm.description.length > 250) c.warn('skill-description-250', p, `${fm.description.length} chars > 250 for a generated-harness skill`);
+  else if (inHarness(p, c) && fm.description.length > 250) c.warn('skill-description-250', p, `${fm.description.length} chars > 250 for a generated-harness skill`);
   c.ok();
 }
 
@@ -137,6 +145,7 @@ export function checkAgent(p, c) {
   if (!fm.name) c.err('agent-name', p, 'missing name');
   else if (fm.name !== file) c.err('agent-name', p, `name '${fm.name}' != filename '${file}'`);
   if (!fm.description || fm.description.length < 40) c.err('agent-description', p, 'description missing or under 40 chars (weak delegation trigger)');
+  else if (inHarness(p, c) && fm.description.length > 300) c.warn('agent-description-300', p, `${fm.description.length} chars > 300 for a generated-harness agent`);
   // Comma lists and YAML flow lists ([A, B], quoted or not) are parsed. A YAML block sequence under `tools:` is not,
   // so it counts as missing. An agent with no tools line inherits every tool, Write and Edit included.
   const tools = (fm.tools ?? '').replace(/^\[|\]$/g, '').split(/[,\s]+/).map((t) => t.replace(/^["']|["']$/g, '')).filter(Boolean);
@@ -147,15 +156,16 @@ export function checkAgent(p, c) {
   c.ok();
 }
 
-// A hooks document: a .claude settings file or a plugin's hooks/hooks.json.
+// A hooks document: a .claude settings file or a plugin's hooks/hooks.json. A malformed structure is hooks-shape;
+// hook-shell-form is only a command hook without exec-form args.
 export function checkHooks(p, json, c) {
   const hooks = json?.hooks;
   if (!hooks || typeof hooks !== 'object') return;
   for (const [event, groups] of Object.entries(hooks)) {
-    if (!Array.isArray(groups)) { c.err('hook-shell-form', p, `${event}: expected an array of matcher groups`); continue; }
+    if (!Array.isArray(groups)) { c.err('hooks-shape', p, `${event}: expected an array of matcher groups`); continue; }
     for (const g of groups) {
-      if (!isObj(g)) { c.err('hook-shell-form', p, `${event}: matcher group is not an object`); continue; }
-      if (!Array.isArray(g.hooks ?? [])) { c.err('hook-shell-form', p, `${event}: 'hooks' must be an array`); continue; }
+      if (!isObj(g)) { c.err('hooks-shape', p, `${event}: matcher group is not an object`); continue; }
+      if (!Array.isArray(g.hooks ?? [])) { c.err('hooks-shape', p, `${event}: 'hooks' must be an array`); continue; }
       for (const h of g.hooks ?? []) checkHook(p, event, h, c);
     }
   }
@@ -163,7 +173,7 @@ export function checkHooks(p, json, c) {
 }
 
 function checkHook(p, event, h, c) {
-  if (!isObj(h)) { c.err('hook-shell-form', p, `${event}: hook entry is not an object`); return; }
+  if (!isObj(h)) { c.err('hooks-shape', p, `${event}: hook entry is not an object`); return; }
   if (h.type !== 'command') return;
   if (!Array.isArray(h.args)) { c.err('hook-shell-form', p, `${event}: command hook without 'args' (exec form required): ${String(h.command).slice(0, 60)}`); return; }
   const bin = basename(String(h.command));
@@ -217,37 +227,41 @@ export function checkLicence(p, c) {
   else c.ok();
 }
 
-function* walk(dir) {
+// Every file under the root except SKIP_ANY directories (any depth), SKIP_ROOT directories (root level only) and
+// PERSONAL files.
+function* walk(dir, atRoot = true) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) yield* walk(p); }
-    else yield p;
+    if (e.isDirectory()) { if (!SKIP_ANY.has(e.name) && !(atRoot && SKIP_ROOT.has(e.name))) yield* walk(p, false); }
+    else if (!PERSONAL.has(e.name)) yield p;
   }
 }
 
-// One file: the text checks, then the structural check its name and place call for. Settings files count only inside
-// a .claude directory (a .vscode/settings.json may legally hold comments), hooks.json only inside a hooks directory.
+// One file: the text checks, then the structural check its name and place call for. A skill file sits in a folder
+// directly inside a skills folder. Settings files count only inside a .claude directory (a .vscode/settings.json may
+// legally hold comments), hooks.json only inside a hooks directory.
 function checkFile(p, c, exempt) {
   const name = basename(p);
   const parent = basename(dirname(p));
   const dirs = c.rel(p).split('/').slice(0, -1);
   checkTextFile(p, c, { exempt });
   if (name === 'SKILL.md') checkSkill(p, c);
+  else if (name.toLowerCase() === 'skill.md' && dirs.at(-2) === 'skills') c.err('skill-file-case', p, `'${name}' is not found on case-sensitive file systems; name it SKILL.md`);
   else if (parent === 'agents' && name.endsWith('.md')) checkAgent(p, c);
   else if (name === 'plugin.json' && parent === '.claude-plugin') checkPluginManifest(p, c);
-  else if (((name === 'settings.json' || name === 'settings.local.json') && dirs.includes('.claude')) || (name === 'hooks.json' && parent === 'hooks')) {
+  else if ((name === 'settings.json' && dirs.includes('.claude')) || (name === 'hooks.json' && parent === 'hooks')) {
     const j = readJson(p, c);
     if (j) checkHooks(p, j, c);
   } else if (LICENCE_FILE.test(name) && dirs.includes('skills')) checkLicence(p, c);
 }
 
 // Validates the tree under root. exemptions: files (absolute, or relative to root) that may quote the deprecated
-// patterns; this file always may. An exception inside a check becomes a validator-crash error that keeps the findings
-// collected so far and names the file being read.
+// patterns; this file and the root CHANGELOG.md always may. An exception inside a check becomes a validator-crash
+// error that keeps the findings collected so far and names the file being read.
 export function validateTree(root, { exemptions = [] } = {}) {
   const base = resolve(root);
   const c = createCollector({ root: base });
-  const exempt = [SELF, ...exemptions].map((f) => resolve(base, f));
+  const exempt = [SELF, 'CHANGELOG.md', ...exemptions].map((f) => resolve(base, f));
   try {
     checkManifests(base, c);
     for (const p of walk(base)) checkFile(p, c, exempt.some((f) => relative(f, p) === ''));

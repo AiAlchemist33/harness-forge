@@ -20,3 +20,6 @@ desktop.ini
 
 # Controller scratch for plan execution (subagent-driven development)
 .superpowers/
+
+# Personal Claude Code settings
+.claude/settings.local.json

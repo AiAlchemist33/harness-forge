@@ -2,7 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -11,15 +11,13 @@ const VALIDATE = join(HERE, '..', 'tools', 'validate.mjs');
 const GOOD = join(HERE, 'fixtures', 'validate', 'good');
 const REPO = join(HERE, '..');
 
+// --json run; root undefined omits --root. A usage error (exit 2) prints no JSON: it comes back as code 2 plus stderr.
 function run(root, cwd) {
-  const args = [VALIDATE, '--root', root, '--json'];
-  try {
-    const out = execFileSync(process.execPath, args, { encoding: 'utf8', cwd: cwd ?? tmpdir() });
-    return { code: 0, ...JSON.parse(out) };
-  } catch (e) {
-    if (!e.stdout) throw e;
-    return { code: e.status, ...JSON.parse(e.stdout) };
-  }
+  const args = [VALIDATE, ...(root === undefined ? [] : ['--root', root]), '--json'];
+  const res = spawnSync(process.execPath, args, { encoding: 'utf8', cwd: cwd ?? tmpdir() });
+  if (res.status === 2) return { code: 2, errors: [], warnings: [], stderr: res.stderr };
+  if (!res.stdout) throw res.error ?? new Error(`validator exited ${res.status} without JSON: ${res.stderr}`);
+  return { code: res.status, ...JSON.parse(res.stdout) };
 }
 // Raw CLI call for argument handling: never throws, always returns status, stdout and stderr.
 const cli = (args, cwd) => spawnSync(process.execPath, [VALIDATE, ...args], { encoding: 'utf8', cwd: cwd ?? tmpdir() });
@@ -40,6 +38,7 @@ test('good tree passes with zero errors', () => {
   const r = run(tree());
   assert.equal(r.code, 0, JSON.stringify(r.errors));
   assert.equal(r.errors.length, 0);
+  assert.equal(r.warnings.length, 0, JSON.stringify(r.warnings));
   assert.ok(r.checks > 10);
 });
 
@@ -124,11 +123,11 @@ test('deprecated patterns are reported', () => {
 test('malformed hook entries are reported, not thrown', () => {
   const r = run(tree((d) => writeFileSync(join(d, '.claude/settings.json'), '{"hooks":{"PreToolUse":[null]}}')));
   assert.equal(r.code, 1);
-  assert.ok(ids(r).includes('hook-shell-form'));
+  assert.ok(ids(r).includes('hooks-shape'));
   // second branch: a matcher group whose own hooks[] holds a non-object entry
   const r2 = run(tree((d) => writeFileSync(join(d, '.claude/settings.json'), '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[null]}]}}')));
   assert.equal(r2.code, 1);
-  assert.ok(ids(r2).includes('hook-shell-form'));
+  assert.ok(ids(r2).includes('hooks-shape'));
 });
 
 test('null marketplace plugin entry is reported, not thrown', () => {
@@ -178,12 +177,12 @@ const crashTree = (more) => tree((d) => { if (more) more(d); rmSync(join(d, 'CLA
 test('a hooks value that is not an array is reported, not iterated', () => {
   const r = run(tree((d) => writeFileSync(join(d, '.claude/settings.json'), hooksJson({}))));
   assert.equal(r.code, 1);
-  assert.ok(ids(r).includes('hook-shell-form'));
+  assert.ok(ids(r).includes('hooks-shape'));
   assert.ok(!ids(r).includes('validator-crash'));
   // a string must not be walked character by character: exactly one finding
   const r2 = run(tree((d) => writeFileSync(join(d, '.claude/settings.json'), hooksJson('abc'))));
   assert.equal(r2.code, 1);
-  assert.equal(ids(r2).filter((id) => id === 'hook-shell-form').length, 1);
+  assert.equal(ids(r2).filter((id) => id === 'hooks-shape').length, 1);
   assert.ok(!ids(r2).includes('validator-crash'));
 });
 
@@ -273,6 +272,7 @@ test('untitled MIT grant text is accepted as a licence', () => {
 test('named permissive licences are accepted', () => {
   for (const text of ['MIT License\n\nCopyright (c) 2026 fx\n', 'Apache License\nVersion 2.0, January 2004\n', 'BSD 3-Clause License\n\nCopyright (c) 2026 fx\n', 'Mozilla Public License Version 2.0\n', 'ISC License\n\nCopyright (c) 2026 fx\n', 'CC0 1.0 Universal\n']) {
     const r = run(tree((d) => writeFileSync(join(d, START_LICENCE), text)));
+    assert.equal(r.code, 0, `${text}: ${JSON.stringify(r.errors)}`);
     assert.ok(!ids(r).includes('unknown-licence'), text);
   }
 });
@@ -333,6 +333,7 @@ test('invalid settings under .claude and hooks/hooks.json still fail json-parse;
   const r2 = run(tree((d) => { mkdirSync(join(d, '.claude/skills/fx/hooks'), { recursive: true }); writeFileSync(join(d, '.claude/skills/fx/hooks/hooks.json'), '{ not json'); }));
   assert.ok(ids(r2).includes('json-parse'));
   const r3 = run(tree((d) => writeFileSync(join(d, 'hooks.json'), '{ not json')));
+  assert.equal(r3.code, 0, JSON.stringify(r3.errors));
   assert.ok(!ids(r3).includes('json-parse'));
 });
 
@@ -380,4 +381,121 @@ test('source files use escape sequences, not literal BOM or replacement characte
     assert.ok(!text.includes(String.fromCharCode(0xfeff)), `${f}: literal U+FEFF`);
     assert.ok(!text.includes(String.fromCharCode(0xfffd)), `${f}: literal U+FFFD`);
   }
+});
+
+// ---- final review: plugin-scoped rules, personal settings, hooks-shape, text coverage, test gaps ----
+
+const FFFD = String.fromCharCode(0xfffd);
+const HARNESS = '.claude/skills/fx/templates/harness';
+const put = (d, file, text) => { mkdirSync(join(d, file, '..'), { recursive: true }); writeFileSync(join(d, file), text); };
+const found = (list, id) => list.filter((x) => x.id === id).map((x) => x.file).sort();
+
+test('templates/harness rules apply wherever the plugin keeps its templates, and only there', () => {
+  const longAgent = `---\nname: helper\ndescription: Use when ${'x'.repeat(300)}\ntools: Read, Grep\n---\nYou help.\n`;
+  const r = run(tree((d) => {
+    put(d, `${HARNESS}/skills/demo/SKILL.md`, skill('demo', 'Use when ' + 'x'.repeat(266))); // 275 characters
+    put(d, `${HARNESS}/settings.fragment.json`, '{ "effortLevel": "high" }\n');
+    put(d, `${HARNESS}/agents/helper.md`, longAgent);
+    // the same content outside templates/harness raises nothing
+    put(d, '.claude/skills/fx/skills/start/SKILL.md', skill('start', 'Use when ' + 'x'.repeat(266)));
+    put(d, '.claude/skills/fx/settings.fragment.json', '{ "effortLevel": "high" }\n');
+    put(d, '.claude/skills/fx/agents/helper.md', longAgent);
+  }));
+  assert.equal(r.code, 0, JSON.stringify(r.errors));
+  assert.deepEqual(r.warnings.map((w) => [w.id, w.file]).sort(), [
+    ['agent-description-300', `${HARNESS}/agents/helper.md`],
+    ['skill-description-250', `${HARNESS}/skills/demo/SKILL.md`],
+    ['user-effort-level', `${HARNESS}/settings.fragment.json`],
+  ]);
+});
+
+test('docs, tests and examples are skipped only at the root; .git, node_modules and .superpowers at any depth', () => {
+  const scanned = [`${HARNESS}/docs/x.md`, '.claude/skills/fx/tests/x.md', '.claude/skills/fx/examples/x.md'];
+  const skipped = ['docs/x.md', 'tests/x.md', 'examples/x.md', '.claude/skills/fx/.git/x.md', '.claude/skills/fx/node_modules/x.md', '.claude/skills/fx/.superpowers/x.md'];
+  const r = run(tree((d) => { for (const f of [...scanned, ...skipped]) put(d, f, `# Notes\n\nbroken ${FFFD} text; run node -e "1"\n`); }));
+  for (const id of ['replacement-char', 'node-eval']) assert.deepEqual(found(r.errors, id), [...scanned].sort(), id);
+});
+
+test('the root CHANGELOG.md is exempt from the deprecated-pattern scan only', () => {
+  const r = run(tree((d) => {
+    put(d, 'CHANGELOG.md', '# Changelog\r\n\r\n- Dropped the node -e hooks.\r\n');
+    put(d, '.claude/skills/fx/CHANGELOG.md', '# Changelog\n\n- Dropped the node -e hooks.\n');
+  }));
+  assert.deepEqual(found(r.errors, 'crlf'), ['CHANGELOG.md']);
+  assert.deepEqual(found(r.errors, 'node-eval'), ['.claude/skills/fx/CHANGELOG.md']);
+});
+
+test('personal .claude/settings.local.json is never parsed or linted', () => {
+  const r = run(tree((d) => put(d, '.claude/settings.local.json', '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"node -e 1"}]}]}}')));
+  assert.equal(r.code, 0, JSON.stringify(r.errors));
+  assert.deepEqual([...r.errors, ...r.warnings], []);
+});
+
+test('an event value that is not an array is a hooks-shape error', () => {
+  const r = run(tree((d) => put(d, '.claude/settings.json', '{"hooks":{"PreToolUse":{"matcher":"Bash"}}}')));
+  assert.equal(r.code, 1);
+  assert.deepEqual(ids(r), ['hooks-shape']);
+});
+
+test('extensionless NOTICE and VERSION files get the encoding checks but not the pattern scan', () => {
+  const r = run(tree((d) => {
+    put(d, 'NOTICE', `Notice\n\nbroken ${FFFD} text; run node -e "1"\n`);
+    put(d, 'VERSION', '1.0.0\r\n');
+  }));
+  assert.deepEqual(r.errors.map((e) => [e.id, e.file]).sort(), [['crlf', 'VERSION'], ['replacement-char', 'NOTICE']]);
+});
+
+test('a skill file spelled other than SKILL.md inside a skills folder fails skill-file-case', () => {
+  const r = run(tree((d) => {
+    put(d, '.claude/skills/fx/skills/other/skill.md', skill('other', 'Use when the file name has the wrong case.'));
+    put(d, 'skill.md', '# Notes on skills\n'); // not inside a skills folder
+    put(d, '.claude/skills/fx/skills/start/references/skill.md', '# Reference\n'); // a document inside a skill, not a skill file
+  }));
+  assert.equal(r.code, 1);
+  assert.deepEqual(r.errors.map((e) => [e.id, e.file]), [['skill-file-case', '.claude/skills/fx/skills/other/skill.md']]);
+});
+
+test('each manifest, skill and agent id fires on its own defect', () => {
+  const start = '.claude/skills/fx/skills/start/SKILL.md';
+  const reviewer = '.claude/skills/fx/agents/reviewer.md';
+  const cases = [
+    ['plugin-manifest', '.claude/skills/fx/.claude-plugin/plugin.json', '{ "name": "fx", "version": "0.1.0", "description": "fixture plugin", "license": "MIT" }\n'],
+    ['skill-frontmatter', start, 'Use when starting the fixture flow.\n'],
+    ['agent-frontmatter', reviewer, 'You review.\n'],
+    ['agent-name', reviewer, agent('tools: Read\n').replace('name: reviewer', 'name: critic')],
+    ['agent-description', reviewer, '---\nname: reviewer\ndescription: Reviews code.\ntools: Read\n---\nYou review.\n'],
+  ];
+  for (const [id, file, text] of cases) {
+    const r = run(tree((d) => put(d, file, text)));
+    assert.equal(r.code, 1, id);
+    assert.ok(ids(r).includes(id), `${id}: ${JSON.stringify(r.errors)}`);
+  }
+  const pinned = run(withAgent(agent('tools: Read, Grep\nmodel: sonnet\n')));
+  assert.equal(pinned.code, 0, JSON.stringify(pinned.errors));
+  assert.deepEqual(wids(pinned), ['agent-model-pinned']);
+});
+
+test('CRLF passes in a .cmd file and fails in a .md file', () => {
+  const r = run(tree((d) => {
+    put(d, 'bin/run.cmd', '@echo off\r\necho run\r\n');
+    put(d, 'bin/README.md', '# bin\r\n');
+  }));
+  assert.deepEqual(r.errors.map((e) => [e.id, e.file]), [['crlf', 'bin/README.md']]);
+});
+
+test('run() returns a usage error as code 2 with the reason instead of parsing empty stdout', () => {
+  const r = run(join(tree(), 'nope'));
+  assert.equal(r.code, 2);
+  assert.deepEqual([r.errors, r.warnings], [[], []]);
+  assert.match(r.stderr, /root not found: /);
+});
+
+test('without --root the validator checks the repo it lives in, whatever the working directory', () => {
+  const r = run(undefined, tmpdir());
+  assert.equal(r.root, resolve(dirname(VALIDATE), '..'));
+  assert.equal(r.code, 0, JSON.stringify(r.errors));
+});
+
+test('the plugin ships a byte-identical copy of the root LICENSE', () => {
+  assert.deepEqual(readFileSync(join(REPO, '.claude/skills/harness-forge/LICENSE')), readFileSync(join(REPO, 'LICENSE')));
 });
