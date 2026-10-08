@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased (2.0.0)
+
+Rebuild as **harness-forge**. Design: `docs/superpowers/specs/2026-10-08-harness-forge-v2-design.md`.
+Progress: `docs/superpowers/plans/2026-10-08-harness-forge-v2.md`.
+
+- P1 — repo skeleton: stub plugin at `.claude/skills/harness-forge/`, structural validator, CI.
+
 ## 1.1.0 (2026-07-05)
 
 Correctness pass — aligned the template and guides with current Claude Code (verified against code.claude.com/docs). No wizard-flow redesign; existing `.wizard-state.json` files still resume.

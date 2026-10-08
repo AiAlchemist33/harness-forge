@@ -4,6 +4,9 @@
 # Pre-edit snapshots written by backup hooks (chiron guard-bak and the like)
 *.bak
 
+# Node
+node_modules/
+
 # OS files
 .DS_Store
 Thumbs.db
